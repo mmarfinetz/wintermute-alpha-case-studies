@@ -1,0 +1,179 @@
+name: Historical fork verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      challenge:
+        description: "Fork challenge to verify"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "00"
+          - "02"
+          - "03"
+          - "06"
+          - "07"
+
+concurrency:
+  group: historical-fork-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fork-tests:
+    name: Historical fork tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      USER_ADDRESS: 0x1000000000000000000000000000000000000001
+      ARCHIVE_ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
+      ARCHIVE_ROBINHOOD_RPC_URL: ${{ secrets.ROBINHOOD_RPC_URL }}
+      ARCHIVE_XLAYER_RPC_URL: ${{ secrets.XLAYER_RPC_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+          cache: true
+          cache-key: historical-${{ hashFiles('foundry.toml', 'challenges/**/*.sol', 'src/**/*.sol') }}
+          cache-restore-keys: historical-
+
+      - name: Install forge-std
+        run: forge install foundry-rs/forge-std@v1.16.2
+
+      - name: Run selected historical forks sequentially
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          selection="${{ inputs.challenge }}"
+          if [[ "$selection" == "all" ]]; then
+            challenges=(00 02 03 06 07)
+          else
+            challenges=("$selection")
+          fi
+
+          run_standard() {
+            local challenge="$1"
+            local endpoints=()
+            local status
+
+            if [[ -n "${ARCHIVE_ETH_RPC_URL:-}" ]]; then
+              endpoints+=("$ARCHIVE_ETH_RPC_URL")
+            fi
+
+            endpoints+=(
+              "https://gateway.tenderly.co/public/mainnet"
+              "https://eth-pokt.nodies.app"
+              "https://eth1.lava.build"
+              "https://eth.meowrpc.com"
+              "https://eth.drpc.org"
+              "https://rpc.flashbots.net"
+              "https://eth.rpc.blxrbdn.com"
+              "https://eth.merkle.io"
+            )
+
+            for url in "${endpoints[@]}"; do
+              echo "::group::Challenge $challenge via $url"
+              export ETH_RPC_URL="$url"
+              if timeout 300 python3 alpha.py check "$challenge"; then
+                echo "::endgroup::"
+                echo "Challenge $challenge passed."
+                return 0
+              fi
+              status=$?
+              echo "::endgroup::"
+              echo "Challenge $challenge failed through this provider (exit $status); trying the next one."
+            done
+
+            echo "Challenge $challenge did not pass through any configured provider." >&2
+            return 1
+          }
+
+          run_cold_start() {
+            local proxy_log="/tmp/robinhood-rpc-proxy.log"
+            local proxy_pid=""
+            local status=0
+
+            export ETH_RPC_URL="${ARCHIVE_ETH_RPC_URL:-https://gateway.tenderly.co/public/mainnet}"
+
+            if [[ -n "${ARCHIVE_ROBINHOOD_RPC_URL:-}" ]]; then
+              export ROBINHOOD_RPC_URL="$ARCHIVE_ROBINHOOD_RPC_URL"
+            else
+              python3 scripts/throttled_rpc_proxy.py \
+                --upstream "https://rpc.nodeflare.app/robinhood/public" \
+                --host 127.0.0.1 \
+                --port 8547 \
+                --interval 11.0 \
+                --retries 8 \
+                --timeout 180 \
+                >"$proxy_log" 2>&1 &
+              proxy_pid=$!
+
+              for _ in $(seq 1 30); do
+                if curl -fsS http://127.0.0.1:8547/health >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 1
+              done
+
+              if ! curl -fsS http://127.0.0.1:8547/health >/dev/null 2>&1; then
+                echo "Robinhood throttling proxy did not become healthy." >&2
+                kill "$proxy_pid" 2>/dev/null || true
+                wait "$proxy_pid" 2>/dev/null || true
+                tail -n 200 "$proxy_log" 2>/dev/null || true
+                return 1
+              fi
+
+              export ROBINHOOD_RPC_URL="http://127.0.0.1:8547"
+            fi
+
+            timeout 5100 forge test \
+              --rpc-url "$ETH_RPC_URL" \
+              --rpc-timeout 1800 \
+              --match-path challenges/06-cold-start/Solution.t.sol \
+              --match-test test_Solution \
+              --fork-retries 5 \
+              --fork-retry-backoff 2000 \
+              -vv || status=$?
+
+            if [[ -n "$proxy_pid" ]]; then
+              kill "$proxy_pid" 2>/dev/null || true
+              wait "$proxy_pid" 2>/dev/null || true
+              if (( status != 0 )); then
+                echo "--- Robinhood RPC proxy log ---"
+                tail -n 200 "$proxy_log" 2>/dev/null || true
+              fi
+            fi
+
+            return "$status"
+          }
+
+          run_firepit() {
+            export ETH_RPC_URL="${ARCHIVE_ETH_RPC_URL:-https://gateway.tenderly.co/public/mainnet}"
+            export XLAYER_RPC_URL="${ARCHIVE_XLAYER_RPC_URL:-https://rpc.xlayer.tech}"
+            timeout 900 python3 alpha.py check 07
+          }
+
+          for challenge in "${challenges[@]}"; do
+            case "$challenge" in
+              06)
+                run_cold_start || exit $?
+                ;;
+              07)
+                run_firepit || exit $?
+                ;;
+              *)
+                run_standard "$challenge" || exit $?
+                ;;
+            esac
+          done

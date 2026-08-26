@@ -28,10 +28,10 @@ jobs:
   code:
     name: Fork test ${{ matrix.challenge }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         challenge: ["00", "02", "03", "06", "07"]
     env:
@@ -45,31 +45,48 @@ jobs:
           version: stable
       - name: Install forge-std
         run: forge install foundry-rs/forge-std
-      - name: Select a working archive Ethereum RPC
+      - name: Run historical fork check with provider fallback
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          challenge="${{ matrix.challenge }}"
+
+          # Firepit only forks X Layer. alpha.py still requires ETH_RPC_URL to
+          # be non-empty, but the Ethereum endpoint is not contacted.
+          if [[ "$challenge" == "07" ]]; then
+            export ETH_RPC_URL="https://gateway.tenderly.co/public/mainnet"
+            timeout 900 python3 alpha.py check "$challenge"
+            exit $?
+          fi
+
           endpoints=(
-            "https://ethereum-rpc.blockreq.com/v1/rpc/public"
-            "https://ethereum.public.blockpi.network/v1/rpc/public"
+            "https://gateway.tenderly.co/public/mainnet"
+            "https://eth-pokt.nodies.app"
+            "https://eth1.lava.build"
+            "https://eth.meowrpc.com"
             "https://eth.drpc.org"
-            "https://eth-mainnet.g.alchemy.com/v2/demo"
+            "https://rpc.flashbots.net"
+            "https://eth.rpc.blxrbdn.com"
+            "https://eth.merkle.io"
           )
+
+          limit=210
+          [[ "$challenge" == "06" ]] && limit=420
+
           for url in "${endpoints[@]}"; do
-            echo "Probing $url"
-            if timeout 25 cast call \
-              0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
-              "totalSupply()(uint256)" \
-              --block 9462777 \
-              --rpc-url "$url" >/tmp/archive.out 2>/tmp/archive.err; then
-              echo "ETH_RPC_URL=$url" >> "$GITHUB_ENV"
-              echo "Selected archive RPC: $url"
-              cat /tmp/archive.out
+            echo "::group::Challenge $challenge via $url"
+            export ETH_RPC_URL="$url"
+            timeout "$limit" python3 alpha.py check "$challenge"
+            status=$?
+            echo "::endgroup::"
+
+            if [[ $status -eq 0 ]]; then
+              echo "Challenge $challenge passed via $url"
               exit 0
             fi
-            cat /tmp/archive.err || true
+
+            echo "Challenge $challenge did not pass via $url (exit $status); trying the next provider."
           done
-          echo "No public endpoint passed the historical-state probe" >&2
+
+          echo "Challenge $challenge did not pass through any public provider." >&2
           exit 1
-      - name: Run official challenge check
-        run: python3 alpha.py check ${{ matrix.challenge }}

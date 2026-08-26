@@ -28,7 +28,7 @@ jobs:
   code:
     name: Fork test ${{ matrix.challenge }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -61,42 +61,52 @@ jobs:
             fi
           fi
 
-          # Cold Start forks both Ethereum and Robinhood Chain. Robinhood's
-          # wallet RPC is not guaranteed to retain historical state, so test
-          # independent archive-capable providers and throttle Foundry for the
-          # low-rate public endpoints.
+          # Cold Start needs archive state from both Ethereum and Robinhood
+          # Chain. NodeFlare exposes the historical Robinhood block publicly,
+          # but permits only one HTTP request per ten seconds per IP. A local
+          # queueing proxy preserves JSON-RPC batches and serializes requests.
           if [[ "$challenge" == "06" ]]; then
             export ETH_RPC_URL="https://gateway.tenderly.co/public/mainnet"
-            robinhood_endpoints=(
-              "https://rpc.nodeflare.app/robinhood/public"
-              "https://robinhood-rpc.publicnode.com"
-              "https://robinhood-mainnet.g.alchemy.com/v2/docs-demo"
-              "https://rpc.mainnet.chain.robinhood.com"
-            )
+            proxy_log="/tmp/robinhood-rpc-proxy.log"
+            python3 scripts/throttled_rpc_proxy.py \
+              --upstream "https://rpc.nodeflare.app/robinhood/public" \
+              --host 127.0.0.1 \
+              --port 8547 \
+              --interval 11.0 \
+              --retries 8 \
+              --timeout 180 \
+              >"$proxy_log" 2>&1 &
+            proxy_pid=$!
 
-            for l2url in "${robinhood_endpoints[@]}"; do
-              echo "::group::Challenge 06 via $l2url"
-              export ROBINHOOD_RPC_URL="$l2url"
-              if timeout 720 forge test \
-                --rpc-url "$ETH_RPC_URL" \
-                --match-path challenges/06-cold-start/Solution.t.sol \
-                --match-test test_Solution \
-                --fork-retries 8 \
-                --fork-retry-backoff 1000 \
-                --compute-units-per-second 2 \
-                -vv; then
-                echo "::endgroup::"
-                echo "Challenge 06 passed via $l2url"
-                exit 0
-              else
-                status=$?
-                echo "::endgroup::"
-                echo "Challenge 06 did not pass via $l2url (exit $status); trying the next provider."
+            cleanup_proxy() {
+              kill "$proxy_pid" 2>/dev/null || true
+              wait "$proxy_pid" 2>/dev/null || true
+              echo "--- Robinhood RPC proxy log ---"
+              tail -n 400 "$proxy_log" 2>/dev/null || true
+            }
+            trap cleanup_proxy EXIT
+
+            for _ in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:8547/health >/dev/null; then
+                break
               fi
+              sleep 1
             done
+            curl -fsS http://127.0.0.1:8547/health >/dev/null
 
-            echo "Challenge 06 did not pass through any Robinhood archive provider." >&2
-            exit 1
+            export ROBINHOOD_RPC_URL="http://127.0.0.1:8547"
+            if timeout 5100 forge test \
+              --rpc-url "$ETH_RPC_URL" \
+              --rpc-timeout 1800 \
+              --match-path challenges/06-cold-start/Solution.t.sol \
+              --match-test test_Solution \
+              --fork-retries 5 \
+              --fork-retry-backoff 2000 \
+              -vv; then
+              exit 0
+            else
+              exit $?
+            fi
           fi
 
           endpoints=(

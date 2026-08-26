@@ -36,7 +36,6 @@ jobs:
         challenge: ["00", "02", "03", "06", "07"]
     env:
       USER_ADDRESS: "0x1000000000000000000000000000000000000001"
-      ETH_RPC_URL: "https://rpcfree.com/ethereum-rpc"
       ROBINHOOD_RPC_URL: "https://rpc.mainnet.chain.robinhood.com"
       XLAYER_RPC_URL: "https://rpc.xlayer.tech"
     steps:
@@ -46,5 +45,31 @@ jobs:
           version: stable
       - name: Install forge-std
         run: forge install foundry-rs/forge-std
+      - name: Select a working archive Ethereum RPC
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoints=(
+            "https://ethereum-rpc.blockreq.com/v1/rpc/public"
+            "https://ethereum.public.blockpi.network/v1/rpc/public"
+            "https://eth.drpc.org"
+            "https://eth-mainnet.g.alchemy.com/v2/demo"
+          )
+          for url in "${endpoints[@]}"; do
+            echo "Probing $url"
+            if timeout 25 cast call \
+              0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 \
+              "totalSupply()(uint256)" \
+              --block 9462777 \
+              --rpc-url "$url" >/tmp/archive.out 2>/tmp/archive.err; then
+              echo "ETH_RPC_URL=$url" >> "$GITHUB_ENV"
+              echo "Selected archive RPC: $url"
+              cat /tmp/archive.out
+              exit 0
+            fi
+            cat /tmp/archive.err || true
+          done
+          echo "No public endpoint passed the historical-state probe" >&2
+          exit 1
       - name: Run official challenge check
         run: python3 alpha.py check ${{ matrix.challenge }}

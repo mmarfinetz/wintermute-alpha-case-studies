@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Serialize JSON-RPC calls to a heavily rate-limited upstream endpoint.
 
-Foundry can issue several concurrent and batch requests while initializing a
-fork. This proxy accepts those requests locally, splits batches, and forwards
-one upstream request at a time with a configurable minimum interval.
+Foundry can issue concurrent and batch requests while initializing a fork.
+This proxy queues incoming HTTP requests and forwards no more than one request
+per configured interval. JSON-RPC batches remain batches so they consume a
+single upstream HTTP request where the provider permits them.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+JsonValue = dict[str, Any] | list[Any]
+
 
 class UpstreamClient:
     def __init__(self, url: str, interval: float, retries: int, timeout: float) -> None:
@@ -28,7 +31,7 @@ class UpstreamClient:
         self._lock = threading.Lock()
         self._last_request_at = 0.0
 
-    def call(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def call(self, payload: JsonValue) -> JsonValue:
         with self._lock:
             for attempt in range(1, self.retries + 1):
                 elapsed = time.monotonic() - self._last_request_at
@@ -43,15 +46,17 @@ class UpstreamClient:
                     headers={
                         "Content-Type": "application/json",
                         "Accept": "application/json",
-                        "User-Agent": "wintermute-alpha-ci-rpc-proxy/1.0",
+                        "User-Agent": "wintermute-alpha-ci-rpc-proxy/1.1",
                     },
                     method="POST",
                 )
 
-                method = payload.get("method", "<unknown>")
-                request_id = payload.get("id")
+                if isinstance(payload, list):
+                    label = f"batch[{len(payload)}]"
+                else:
+                    label = f"{payload.get('method', '<unknown>')} id={payload.get('id')}"
                 print(
-                    f"upstream attempt={attempt} method={method} id={request_id}",
+                    f"upstream attempt={attempt} request={label}",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -61,8 +66,8 @@ class UpstreamClient:
                         raw = response.read()
                     self._last_request_at = time.monotonic()
                     decoded = json.loads(raw.decode("utf-8"))
-                    if not isinstance(decoded, dict):
-                        raise RuntimeError("upstream returned a non-object JSON-RPC response")
+                    if not isinstance(decoded, (dict, list)):
+                        raise RuntimeError("upstream returned invalid JSON-RPC response shape")
                     return decoded
                 except urllib.error.HTTPError as exc:
                     self._last_request_at = time.monotonic()
@@ -93,7 +98,7 @@ class UpstreamClient:
 
 
 class RpcHandler(BaseHTTPRequestHandler):
-    server_version = "ThrottledRpcProxy/1.0"
+    server_version = "ThrottledRpcProxy/1.1"
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"proxy {self.address_string()} {fmt % args}", file=sys.stderr, flush=True)
@@ -110,29 +115,23 @@ class RpcHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self) -> None:  # noqa: N802
+        request_id: Any = None
         try:
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length)
             payload = json.loads(raw.decode("utf-8"))
-
-            client: UpstreamClient = self.server.upstream_client  # type: ignore[attr-defined]
             if isinstance(payload, list):
                 if not payload:
                     raise ValueError("empty JSON-RPC batch")
-                responses = []
-                for item in payload:
-                    if not isinstance(item, dict):
-                        raise ValueError("JSON-RPC batch entries must be objects")
-                    response = client.call(item)
-                    # JSON-RPC notifications omit an id and require no response.
-                    if "id" in item:
-                        responses.append(response)
-                result: Any = responses
+                if not all(isinstance(item, dict) for item in payload):
+                    raise ValueError("JSON-RPC batch entries must be objects")
             elif isinstance(payload, dict):
-                result = client.call(payload)
+                request_id = payload.get("id")
             else:
                 raise ValueError("JSON-RPC request must be an object or array")
 
+            client: UpstreamClient = self.server.upstream_client  # type: ignore[attr-defined]
+            result = client.call(payload)
             encoded = json.dumps(result, separators=(",", ":")).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -143,7 +142,7 @@ class RpcHandler(BaseHTTPRequestHandler):
             print(f"proxy error: {exc}", file=sys.stderr, flush=True)
             error = {
                 "jsonrpc": "2.0",
-                "id": None,
+                "id": request_id,
                 "error": {"code": -32098, "message": str(exc)},
             }
             encoded = json.dumps(error, separators=(",", ":")).encode("utf-8")

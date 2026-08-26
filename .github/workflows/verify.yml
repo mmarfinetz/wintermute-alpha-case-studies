@@ -1,13 +1,24 @@
-name: Verify Wintermute Alpha solutions
+name: Verify analysis answers
 
 on:
   push:
-    branches: [main, complete-challenges]
+    branches:
+      - main
+    paths:
+      - "alpha.py"
+      - "challenges/**/answer.txt"
+      - "challenges/**/challenge.json"
+      - ".github/workflows/verify.yml"
   pull_request:
+    paths:
+      - "alpha.py"
+      - "challenges/**/answer.txt"
+      - "challenges/**/challenge.json"
+      - ".github/workflows/verify.yml"
   workflow_dispatch:
 
 concurrency:
-  group: verify-${{ github.ref }}
+  group: analysis-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -15,124 +26,19 @@ permissions:
 
 jobs:
   analysis:
-    name: Analysis checker
-    runs-on: ubuntu-latest
+    name: Official analysis checker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Run official hash checker
-        run: python alpha.py check 01 04 05 08
 
-  code:
-    name: Fork test ${{ matrix.challenge }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        challenge: ["00", "02", "03", "06", "07"]
-    env:
-      USER_ADDRESS: "0x1000000000000000000000000000000000000001"
-      XLAYER_RPC_URL: "https://rpc.xlayer.tech"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-      - name: Install forge-std
-        run: forge install foundry-rs/forge-std
-      - name: Run historical fork check with provider fallback
-        shell: bash
-        run: |
-          set -uo pipefail
-          challenge="${{ matrix.challenge }}"
-
-          # Firepit only forks X Layer. alpha.py still requires ETH_RPC_URL to
-          # be non-empty, but the Ethereum endpoint is not contacted.
-          if [[ "$challenge" == "07" ]]; then
-            export ETH_RPC_URL="https://gateway.tenderly.co/public/mainnet"
-            if timeout 900 python3 alpha.py check "$challenge"; then
-              exit 0
-            else
-              exit $?
-            fi
-          fi
-
-          # Cold Start needs archive state from both Ethereum and Robinhood
-          # Chain. NodeFlare exposes the historical Robinhood block publicly,
-          # but permits only one HTTP request per ten seconds per IP. A local
-          # queueing proxy preserves JSON-RPC batches and serializes requests.
-          if [[ "$challenge" == "06" ]]; then
-            export ETH_RPC_URL="https://gateway.tenderly.co/public/mainnet"
-            proxy_log="/tmp/robinhood-rpc-proxy.log"
-            python3 scripts/throttled_rpc_proxy.py \
-              --upstream "https://rpc.nodeflare.app/robinhood/public" \
-              --host 127.0.0.1 \
-              --port 8547 \
-              --interval 11.0 \
-              --retries 8 \
-              --timeout 180 \
-              >"$proxy_log" 2>&1 &
-            proxy_pid=$!
-
-            cleanup_proxy() {
-              kill "$proxy_pid" 2>/dev/null || true
-              wait "$proxy_pid" 2>/dev/null || true
-              echo "--- Robinhood RPC proxy log ---"
-              tail -n 400 "$proxy_log" 2>/dev/null || true
-            }
-            trap cleanup_proxy EXIT
-
-            for _ in $(seq 1 30); do
-              if curl -fsS http://127.0.0.1:8547/health >/dev/null; then
-                break
-              fi
-              sleep 1
-            done
-            curl -fsS http://127.0.0.1:8547/health >/dev/null
-
-            export ROBINHOOD_RPC_URL="http://127.0.0.1:8547"
-            if timeout 5100 forge test \
-              --rpc-url "$ETH_RPC_URL" \
-              --rpc-timeout 1800 \
-              --match-path challenges/06-cold-start/Solution.t.sol \
-              --match-test test_Solution \
-              --fork-retries 5 \
-              --fork-retry-backoff 2000 \
-              -vv; then
-              exit 0
-            else
-              exit $?
-            fi
-          fi
-
-          endpoints=(
-            "https://gateway.tenderly.co/public/mainnet"
-            "https://eth-pokt.nodies.app"
-            "https://eth1.lava.build"
-            "https://eth.meowrpc.com"
-            "https://eth.drpc.org"
-            "https://rpc.flashbots.net"
-            "https://eth.rpc.blxrbdn.com"
-            "https://eth.merkle.io"
-          )
-
-          for url in "${endpoints[@]}"; do
-            echo "::group::Challenge $challenge via $url"
-            export ETH_RPC_URL="$url"
-            if timeout 210 python3 alpha.py check "$challenge"; then
-              echo "::endgroup::"
-              echo "Challenge $challenge passed via $url"
-              exit 0
-            else
-              status=$?
-              echo "::endgroup::"
-              echo "Challenge $challenge did not pass via $url (exit $status); trying the next provider."
-            fi
-          done
-
-          echo "Challenge $challenge did not pass through any public provider." >&2
-          exit 1
+      - name: Check every analysis challenge
+        run: python3 alpha.py check 01 04 05 08

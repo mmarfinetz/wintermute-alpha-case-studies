@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 5
       matrix:
         challenge: ["00", "02", "03", "06", "07"]
     env:
@@ -78,6 +78,7 @@ jobs:
               echo "::group::Challenge 06 via $l2url"
               export ROBINHOOD_RPC_URL="$l2url"
               if timeout 720 forge test \
+                --rpc-url "$ETH_RPC_URL" \
                 --match-path challenges/06-cold-start/Solution.t.sol \
                 --match-test test_Solution \
                 --fork-retries 8 \

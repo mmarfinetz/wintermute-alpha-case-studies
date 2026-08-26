@@ -89,10 +89,11 @@ jobs:
                 echo "::endgroup::"
                 echo "Challenge $challenge passed."
                 return 0
+              else
+                status=$?
+                echo "::endgroup::"
+                echo "Challenge $challenge failed through this provider (exit $status); trying the next one."
               fi
-              status=$?
-              echo "::endgroup::"
-              echo "Challenge $challenge failed through this provider (exit $status); trying the next one."
             done
 
             echo "Challenge $challenge did not pass through any configured provider." >&2

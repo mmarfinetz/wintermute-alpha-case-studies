@@ -41,6 +41,6 @@ jobs:
         with:
           version: stable
       - name: Install forge-std
-        run: forge install foundry-rs/forge-std --no-commit
+        run: forge install foundry-rs/forge-std
       - name: Run official challenge check
         run: python3 alpha.py check ${{ matrix.challenge }}

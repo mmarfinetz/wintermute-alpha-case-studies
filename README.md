@@ -1,8 +1,10 @@
 # Wintermute Alpha Challenge 2026 — Complete Solutions
 
-![Verification](https://github.com/mmarfinetz/wintermute-alpha-case-studies/actions/workflows/verify.yml/badge.svg?branch=main)
+![Analysis verification](https://github.com/mmarfinetz/wintermute-alpha-case-studies/actions/workflows/verify.yml/badge.svg?branch=main)
 
 Reproducible analysis and Foundry solutions for the educational [Wintermute Alpha Challenge 2026](https://github.com/WintermuteResearch/Alpha-Challenge-2026).
+
+**Full verification:** [900/900 passed in GitHub Actions](https://github.com/mmarfinetz/wintermute-alpha-case-studies/actions/runs/32982797047) on verified commit [`17e63ec`](https://github.com/mmarfinetz/wintermute-alpha-case-studies/commit/17e63ecb9a682bf9fd2ec971a817e9f3aa02884f). See [`VERIFICATION.md`](./VERIFICATION.md) for the run evidence and CI repair record.
 
 The repository preserves Wintermute's checker format: analysis answers live in `answer.txt`, executable answers live in `Solution.t.sol`, and `alpha.py` runs the official-style hash and historical-fork checks.
 
@@ -44,7 +46,7 @@ Requirements:
 cp .env.example .env
 # Fill in the archive RPC values in .env.
 
-forge install foundry-rs/forge-std
+forge install foundry-rs/forge-std@v1.16.2
 python3 alpha.py list
 python3 alpha.py check
 ```
@@ -61,7 +63,16 @@ python3 alpha.py check 02
 - `ROBINHOOD_RPC_URL`: Robinhood Chain archive state at block 120,000.
 - `XLAYER_RPC_URL`: X Layer state at block 68,413,600.
 
-The GitHub Actions workflow includes public-provider fallbacks for reproducibility. For reliable local runs, use your own archive endpoints.
+For reliable local runs, use your own archive endpoints. The manual GitHub workflow also includes public-provider fallbacks.
+
+## Continuous integration
+
+CI is split so documentation changes do not launch several costly historical forks:
+
+- [`verify.yml`](./.github/workflows/verify.yml) automatically checks all analysis answers when an answer, digest, checker, or the workflow itself changes.
+- [`fork-tests.yml`](./.github/workflows/fork-tests.yml) manually runs one executable challenge or all five, sequentially, from the Actions tab.
+
+The manual workflow uses `ETH_RPC_URL`, `ROBINHOOD_RPC_URL`, and `XLAYER_RPC_URL` repository secrets when configured. Public fallbacks remain available for reproducibility.
 
 ## Layout
 
@@ -76,7 +87,11 @@ The GitHub Actions workflow includes public-provider fallbacks for reproducibili
 │       └── challenge.json
 ├── scripts/
 │   └── throttled_rpc_proxy.py
-└── .github/workflows/verify.yml
+├── .github/workflows/
+│   ├── verify.yml
+│   └── fork-tests.yml
+├── SOURCES.md
+└── VERIFICATION.md
 ```
 
 ## Verification and attribution

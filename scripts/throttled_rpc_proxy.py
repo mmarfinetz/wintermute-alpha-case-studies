@@ -46,7 +46,7 @@ class UpstreamClient:
                     headers={
                         "Content-Type": "application/json",
                         "Accept": "application/json",
-                        "User-Agent": "wintermute-alpha-ci-rpc-proxy/1.1",
+                        "User-Agent": "wintermute-alpha-ci-rpc-proxy/1.2",
                     },
                     method="POST",
                 )
@@ -98,21 +98,33 @@ class UpstreamClient:
 
 
 class RpcHandler(BaseHTTPRequestHandler):
-    server_version = "ThrottledRpcProxy/1.1"
+    server_version = "ThrottledRpcProxy/1.2"
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"proxy {self.address_string()} {fmt % args}", file=sys.stderr, flush=True)
+
+    def _send_bytes(self, status: int, content_type: str, data: bytes) -> bool:
+        """Send a response, treating an early client disconnect as normal."""
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            print(
+                "proxy client disconnected before the response was delivered",
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path != "/health":
             self.send_error(404)
             return
-        data = b"ok\n"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        self._send_bytes(200, "text/plain; charset=utf-8", b"ok\n")
 
     def do_POST(self) -> None:  # noqa: N802
         request_id: Any = None
@@ -133,11 +145,7 @@ class RpcHandler(BaseHTTPRequestHandler):
             client: UpstreamClient = self.server.upstream_client  # type: ignore[attr-defined]
             result = client.call(payload)
             encoded = json.dumps(result, separators=(",", ":")).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
-            self.end_headers()
-            self.wfile.write(encoded)
+            self._send_bytes(200, "application/json", encoded)
         except Exception as exc:  # noqa: BLE001
             print(f"proxy error: {exc}", file=sys.stderr, flush=True)
             error = {
@@ -146,11 +154,7 @@ class RpcHandler(BaseHTTPRequestHandler):
                 "error": {"code": -32098, "message": str(exc)},
             }
             encoded = json.dumps(error, separators=(",", ":")).encode("utf-8")
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
-            self.end_headers()
-            self.wfile.write(encoded)
+            self._send_bytes(502, "application/json", encoded)
 
 
 def parse_args() -> argparse.Namespace:

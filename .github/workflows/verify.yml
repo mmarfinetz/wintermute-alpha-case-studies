@@ -28,7 +28,7 @@ jobs:
   code:
     name: Fork test ${{ matrix.challenge }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -36,7 +36,6 @@ jobs:
         challenge: ["00", "02", "03", "06", "07"]
     env:
       USER_ADDRESS: "0x1000000000000000000000000000000000000001"
-      ROBINHOOD_RPC_URL: "https://rpc.mainnet.chain.robinhood.com"
       XLAYER_RPC_URL: "https://rpc.xlayer.tech"
     steps:
       - uses: actions/checkout@v4
@@ -55,8 +54,48 @@ jobs:
           # be non-empty, but the Ethereum endpoint is not contacted.
           if [[ "$challenge" == "07" ]]; then
             export ETH_RPC_URL="https://gateway.tenderly.co/public/mainnet"
-            timeout 900 python3 alpha.py check "$challenge"
-            exit $?
+            if timeout 900 python3 alpha.py check "$challenge"; then
+              exit 0
+            else
+              exit $?
+            fi
+          fi
+
+          # Cold Start forks both Ethereum and Robinhood Chain. Robinhood's
+          # wallet RPC is not guaranteed to retain historical state, so test
+          # independent archive-capable providers and throttle Foundry for the
+          # low-rate public endpoints.
+          if [[ "$challenge" == "06" ]]; then
+            export ETH_RPC_URL="https://gateway.tenderly.co/public/mainnet"
+            robinhood_endpoints=(
+              "https://rpc.nodeflare.app/robinhood/public"
+              "https://robinhood-rpc.publicnode.com"
+              "https://robinhood-mainnet.g.alchemy.com/v2/docs-demo"
+              "https://rpc.mainnet.chain.robinhood.com"
+            )
+
+            for l2url in "${robinhood_endpoints[@]}"; do
+              echo "::group::Challenge 06 via $l2url"
+              export ROBINHOOD_RPC_URL="$l2url"
+              if timeout 720 forge test \
+                --match-path challenges/06-cold-start/Solution.t.sol \
+                --match-test test_Solution \
+                --fork-retries 8 \
+                --fork-retry-backoff 1000 \
+                --compute-units-per-second 2 \
+                -vv; then
+                echo "::endgroup::"
+                echo "Challenge 06 passed via $l2url"
+                exit 0
+              else
+                status=$?
+                echo "::endgroup::"
+                echo "Challenge 06 did not pass via $l2url (exit $status); trying the next provider."
+              fi
+            done
+
+            echo "Challenge 06 did not pass through any Robinhood archive provider." >&2
+            exit 1
           fi
 
           endpoints=(
@@ -70,22 +109,18 @@ jobs:
             "https://eth.merkle.io"
           )
 
-          limit=210
-          [[ "$challenge" == "06" ]] && limit=420
-
           for url in "${endpoints[@]}"; do
             echo "::group::Challenge $challenge via $url"
             export ETH_RPC_URL="$url"
-            timeout "$limit" python3 alpha.py check "$challenge"
-            status=$?
-            echo "::endgroup::"
-
-            if [[ $status -eq 0 ]]; then
+            if timeout 210 python3 alpha.py check "$challenge"; then
+              echo "::endgroup::"
               echo "Challenge $challenge passed via $url"
               exit 0
+            else
+              status=$?
+              echo "::endgroup::"
+              echo "Challenge $challenge did not pass via $url (exit $status); trying the next provider."
             fi
-
-            echo "Challenge $challenge did not pass via $url (exit $status); trying the next provider."
           done
 
           echo "Challenge $challenge did not pass through any public provider." >&2

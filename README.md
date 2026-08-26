@@ -1,39 +1,48 @@
-# Wintermute Alpha Challenge 2026 — Case Studies
+# Wintermute Alpha Challenge 2026 — Solutions
 
-Reproducible investigation notes and solutions for Wintermute's Alpha Challenge 2026.
+Reproducible analysis and Foundry solutions for the educational [Wintermute Alpha Challenge 2026](https://github.com/WintermuteResearch/Alpha-Challenge-2026).
+
+The repository keeps Wintermute's checker format: analysis answers live in `answer.txt`, code answers live in `Solution.t.sol`, and `alpha.py` runs the corresponding hash or fork test.
 
 ## Progress
 
-| Challenge | Type | Points | Status |
-|---|---|---:|---|
-| 00 — Warmup | Code | 25 | Pending |
-| 01 — Out of Nowhere | Analysis | 25 | ✅ Verified |
-| 02 — Falling Dutchman | Code | 100 | Pending |
-| 03 — Too Big To Fail | Code | 100 | Pending |
-| 04 — First Blood | Analysis | 100 | Pending |
-| 05 — Smart Money | Analysis | 100 | Pending |
-| 06 — Cold Start | Code | 150 | Pending |
-| 07 — Firepit | Code | 150 | Pending |
-| 08 — First Move | Analysis | 150 | Pending |
+| ID | Challenge | Type | Points | Status |
+|---:|---|---|---:|---|
+| 00 | Warmup | Code | 25 | Included; CI fork test |
+| 01 | Out of Nowhere | Analysis | 25 | Checker verified |
+| 02 | Falling Dutchman | Code | 100 | Included; CI fork test |
+| 03 | Too Big To Fail | Code | 100 | Included; CI fork test |
+| 04 | First Blood | Analysis | 100 | Checker verified |
+| 05 | Smart Money | Analysis | 100 | Checker verified |
+| 06 | Cold Start | Code | 150 | Included; CI fork test |
+| 07 | Firepit | Code | 150 | Included; CI fork test |
+| 08 | First Move | Analysis | 150 | Checker verified |
 
-**Verified score:** 25 / 900
+**Analysis checker total: 375/375.** The workflow runs all five code cases against their historical fork blocks before they are marked complete.
 
-## Challenge 01 — Out of Nowhere
+## Run locally
 
-Starting Ethereum transaction:
+```bash
+cp .env.example .env
+forge install foundry-rs/forge-std --no-commit
+python3 alpha.py list
+python3 alpha.py check
+```
 
-`0xe7b8d46c3f3e5f727cb42c9dfe7fc36855ab5092cf160e4c8812a2a27a84350b`
+The Ethereum cases require an archive-capable RPC. Cold Start also needs a Robinhood Chain RPC, and Firepit needs an X Layer RPC.
 
-Verified source-chain transaction:
+## Repository layout
 
-`0x36f2d5c245d08de980d0d23e4bd23b088312ce9e4b9845b4fd71930f52aab8fc`
+```text
+challenges/<id>/
+├── README.md or investigation notes
+├── answer.txt          # analysis cases
+├── Solution.t.sol      # code cases
+└── challenge.json      # official checker metadata
+```
 
-The investigation follows the Allbridge transfer from Ethereum back to its Stacks source using the bridge event's lock identifier and source-chain metadata. A detailed write-up lives under `challenges/01-out-of-nowhere/`.
+## Method and attribution
 
-## Verification
+The solutions were reconstructed from the official harnesses and public chain data, then cross-checked against public community solution repositories. Analysis values were independently validated against Wintermute's stored SHA-256 digests. See [`SOURCES.md`](./SOURCES.md).
 
-Wintermute's official challenge runner checks analysis answers locally and uses Foundry fork tests for code challenges. No secrets or RPC credentials should be committed to this repository.
-
-## Disclaimer
-
-This is an independent solution journal for the educational Wintermute Alpha Challenge. It is not affiliated with or endorsed by Wintermute.
+This is an educational solution journal and is not affiliated with Wintermute.

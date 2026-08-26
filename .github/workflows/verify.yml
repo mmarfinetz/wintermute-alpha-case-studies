@@ -1,0 +1,46 @@
+name: Verify Wintermute Alpha solutions
+
+on:
+  push:
+    branches: [main, complete-challenges]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Analysis checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run official hash checker
+        run: python alpha.py check 01 04 05 08
+
+  code:
+    name: Fork test ${{ matrix.challenge }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        challenge: ["00", "02", "03", "06", "07"]
+    env:
+      USER_ADDRESS: "0x1000000000000000000000000000000000000001"
+      ETH_RPC_URL: "https://ethereum-rpc.publicnode.com"
+      ROBINHOOD_RPC_URL: "https://rpc.mainnet.chain.robinhood.com"
+      XLAYER_RPC_URL: "https://rpc.xlayer.tech"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Install forge-std
+        run: forge install foundry-rs/forge-std --no-commit
+      - name: Run official challenge check
+        run: python3 alpha.py check ${{ matrix.challenge }}
